@@ -1,32 +1,29 @@
 import os
 import subprocess
+import webbrowser
+import json
 from flask import Flask, request, jsonify, render_template
 import numpy as np
 import librosa
 import soundfile as sf
 from sklearn.mixture import GaussianMixture
+import speech_recognition as sr
 
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_FOLDER = os.path.join(BASE_DIR, "static")
 
-# Assure-toi que le dossier 'static' existe
 if not os.path.exists(AUDIO_FOLDER):
     os.makedirs(AUDIO_FOLDER)
-from pydub import AudioSegment
 
-def convert_to_wav_pydub(input_path, output_path):
-    """ Convertit un fichier audio en WAV avec pydub """
-    try:
-        audio = AudioSegment.from_file(input_path)
-        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)  # 16kHz, mono, 16-bit
-        audio.export(output_path, format="wav")
-        print(f"Conversion réussie avec pydub : {input_path} → {output_path}")
-        return output_path
-    except Exception as e:
-        print(f"Erreur de conversion avec pydub : {e}")
-        return None
+# Liste des commandes reconnues
+commandes = {
+    "ouvre youtube": lambda: webbrowser.open("https://www.youtube.com"),
+    "recherche": lambda query: webbrowser.open(f"https://www.google.com/search?q={query}"),
+    "ouvre gmail": lambda: webbrowser.open("https://mail.google.com"),
+    "ouvre calculatrice": lambda: subprocess.run("calc.exe", shell=True),
+}
 
 def convert_to_wav(input_path, output_path):
     """ Convertit un fichier audio en WAV """
@@ -35,37 +32,37 @@ def convert_to_wav(input_path, output_path):
             "ffmpeg", "-y", "-i", input_path, 
             "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", output_path
         ], check=True)
-        print(f"Conversion réussie : {input_path} → {output_path}")
         return output_path
-    except subprocess.CalledProcessError as e:
-        print(f"Erreur lors de la conversion de {input_path} : {e}")
+    except subprocess.CalledProcessError:
         return None
 
-
 def recognize_speech(audio_path):
+    """ Transcrit la parole en texte """
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio_path) as source:
+        audio = recognizer.record(source)
+
     try:
-        # Tentative de lecture avec soundfile
-        try:
-            y, sr = sf.read(audio_path)
-        except RuntimeError:
-            print("Soundfile a échoué, tentative avec librosa...")
-            y, sr = librosa.load(audio_path, sr=None)
+        texte = recognizer.recognize_google(audio, language="fr-FR").lower()
+        print(f"Commande reconnue : {texte}")
+        return texte
+    except sr.UnknownValueError:
+        return "Je n'ai pas compris"
+    except sr.RequestError:
+        return "Erreur avec le service de reconnaissance"
 
-        if len(y) == 0:
-            raise ValueError("Le fichier audio est vide ou corrompu")
+def execute_command(texte):
+    """ Exécute une commande selon la parole reconnue """
+    for cmd, action in commandes.items():
+        if texte.startswith(cmd):
+            if cmd == "recherche":
+                query = texte.replace("recherche", "").strip()
+                action(query)  # Recherche sur Google
+            else:
+                action()  # Ouvre une application/site web
+            return f"{cmd}"
 
-        # Extraction des MFCC
-        features = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13).T, axis=0)
-
-        # Modèle GMM fictif
-        model = GaussianMixture(n_components=3, covariance_type='diag')
-        model.fit(features.reshape(-1, 1))
-
-        return "Commande reconnue (exemple)"
-    
-    except Exception as e:
-        print(f"Erreur de traitement audio : {str(e)}")
-        return "Erreur dans l'enregistrement audio"
+    return "Commande non reconnue"
 
 @app.route("/")
 def index():
@@ -79,25 +76,15 @@ def predict():
     audio_file = request.files["audio"]
     file_path = os.path.join(AUDIO_FOLDER, "audio.wav")
     audio_file.save(file_path)
-    file_path = "static/audio_fixed.wav"
 
-
-
-    if os.path.exists(file_path):
-        print(f"Fichier audio reçu et sauvegardé : {file_path}")
-
-        # Vérifier et convertir si nécessaire
-        fixed_audio_path = os.path.join(AUDIO_FOLDER, "audio_fixed.wav")
-        if convert_to_wav(file_path, fixed_audio_path):
-            result_text = recognize_speech(fixed_audio_path)
-        else:
-            result_text = "Erreur dans la conversion audio"
-
+    fixed_audio_path = os.path.join(AUDIO_FOLDER, "audio_fixed.wav")
+    if convert_to_wav(file_path, fixed_audio_path):
+        texte_reconnu = recognize_speech(fixed_audio_path)
+        resultat = execute_command(texte_reconnu)
     else:
-        print(f"Erreur : le fichier n'a pas été sauvegardé à {file_path}")
-        result_text = "Erreur dans l'enregistrement audio"
+        resultat = "Erreur dans la conversion audio"
 
-    return jsonify({"text": result_text})
+    return jsonify({"text": texte_reconnu, "result": resultat})
 
 if __name__ == "__main__":
     app.run(debug=True)

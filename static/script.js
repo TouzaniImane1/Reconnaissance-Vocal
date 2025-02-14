@@ -1,65 +1,50 @@
-const recordButton = document.getElementById("record");
-const chatbox = document.getElementById("chatbox");
+document.addEventListener("DOMContentLoaded", function() {
+    const recordButton = document.getElementById("record");
+    const chatBox = document.getElementById("chat-box");
 
-let mediaRecorder;
-let audioChunks = [];
-
-recordButton.addEventListener("click", async () => {
-    if (!mediaRecorder || mediaRecorder.state === "inactive") {
-        startRecording();
-    } else {
-        stopRecording();
+    function addMessage(text, sender) {
+        const messageDiv = document.createElement("div");
+        messageDiv.classList.add("message", sender);
+        messageDiv.textContent = text;
+        chatBox.appendChild(messageDiv);
+        chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll
     }
-});
 
-async function startRecording() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
+    recordButton.addEventListener("click", function() {
+        let constraints = { audio: true };
+        navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+            const mediaRecorder = new MediaRecorder(stream);
+            let chunks = [];
 
-    mediaRecorder.ondataavailable = event => {
-        audioChunks.push(event.data);
-    };
+            mediaRecorder.ondataavailable = function(event) {
+                chunks.push(event.data);
+            };
 
-    mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
-        sendAudio(audioBlob);
-    };
+            mediaRecorder.onstop = function() {
+                addMessage("Utilisateur : (Envoi audio...)", "user");
 
-    mediaRecorder.start();
-    recordButton.textContent = "⏹️ Arrêter";
-}
+                const audioBlob = new Blob(chunks, { type: "audio/wav" });
+                const formData = new FormData();
+                formData.append("audio", audioBlob, "recorded_audio.wav");
 
-function stopRecording() {
-    if (mediaRecorder) {
-        mediaRecorder.stop();
-        recordButton.textContent = "🎤 Parler";
-    }
-}
+                fetch("/predict", {
+                    method: "POST",
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    addMessage(`Assistant : ${data.text}`, "assistant");
+                    addMessage(`Exécution : ${data.result}`, "assistant");
+                })
+                .catch(error => console.error("Erreur :", error));
+            };
 
-async function sendAudio(audioBlob) {
-    const formData = new FormData();
-    formData.append("audio", audioBlob, "audio.wav");
-
-    addMessage("Utilisateur : (Envoi audio...)", "user");
-
-    try {
-        const response = await fetch("/predict", {
-            method: "POST",
-            body: formData
+            mediaRecorder.start();
+            setTimeout(() => {
+                mediaRecorder.stop();
+            }, 4000);
+        }).catch(function(error) {
+            console.error("Erreur d'accès au micro :", error);
         });
-
-        const data = await response.json();
-        addMessage("Assistant : " + data.text, "bot");
-    } catch (error) {
-        addMessage("Assistant : Erreur de reconnaissance vocale.", "bot");
-    }
-}
-
-function addMessage(text, sender) {
-    const messageDiv = document.createElement("div");
-    messageDiv.classList.add("message", sender);
-    messageDiv.textContent = text;
-    chatbox.appendChild(messageDiv);
-    chatbox.scrollTop = chatbox.scrollHeight;
-}
+    });
+});
